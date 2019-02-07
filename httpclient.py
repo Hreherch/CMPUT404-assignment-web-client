@@ -33,10 +33,20 @@ class HTTPResponse(object):
         self.body = body
 
 class HTTPClient(object):
-    #def get_host_port(self,url):
+    # urllib.parse is OKAY for parsing URLs -- requirements.txt
+    def get_host_port(self,url):
+        urlinfo = urllib.parse.urlparse(url)
+        host = urlinfo.hostname
+        port = urlinfo.port
+        path = urlinfo.path if urlinfo.path else "/"
+        if not port:
+            port = 443 if url.startswith("https") else 80
+        return (host, port, path)
 
     def connect(self, host, port):
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # From CMPUT404 Lab 02
+        (family, socket_type, proto, cannon_name, sock_addr) = socket.getaddrinfo(host, port, proto=socket.SOL_TCP)[0]
+        self.socket = socket.socket(family, socket_type, proto)
         self.socket.connect((host, port))
         return None
 
@@ -51,33 +61,74 @@ class HTTPClient(object):
     
     def sendall(self, data):
         self.socket.sendall(data.encode('utf-8'))
-        
+    
     def close(self):
         self.socket.close()
 
     # read everything from the socket
     def recvall(self, sock):
-        buffer = bytearray()
+        buffer = b""
         done = False
         while not done:
             part = sock.recv(1024)
             if (part):
-                buffer.extend(part)
+                buffer += part
             else:
                 done = not part
         return buffer.decode('utf-8')
 
     def GET(self, url, args=None):
-        code = 500
-        body = ""
-        return HTTPResponse(code, body)
+        host, port, path = self.get_host_port(url)
+        self.connect(host, port)
+        data = "GET {PATH} HTTP/1.1\r\n".format(PATH=path)
+        data += "Host: {HOST}\r\n".format(HOST=host)
+        data += "\r\n"
+        self.sendall(data)
+        self.socket.shutdown(socket.SHUT_WR)
+        data = self.recvall(self.socket)
+        print(data) # for printing user-story
+        data = data.split("\r")
+        index = 0
+        for line in data[1:]:
+            index += 1
+            if ":" not in line: break
+        status = int(data[0].split()[1])
+        self.close()
+        return HTTPResponse(status, "\r".join(data[index:]).strip())
 
     def POST(self, url, args=None):
-        code = 500
+        host, port, path = self.get_host_port(url)
+        self.connect(host, port)
         body = ""
-        return HTTPResponse(code, body)
+        if args:
+            for arg in args:
+                body += arg + "=" + args[arg] + "&"
+            body = body[:-1] # remove the last &
+        data = "POST {PATH} HTTP/1.1\r\n".format(PATH=path)
+        data += "Host: {HOST}\r\n".format(HOST=host)
+        data += "Content-Type: application/x-www-form-urlencoded\r\n"
+        data += "Content-Length: " + str(len(body)) + "\r\n"
+        data += "\r\n"
+        data += body
+        self.sendall(data)
+        self.socket.shutdown(socket.SHUT_WR)
+        data = self.recvall(self.socket)
+        print(data) # for printing user-story
+        data = data.split("\r")
+        index = 0
+        for line in data[1:]:
+            index += 1
+            if ":" not in line: break
+        status = int(data[0].split()[1])
+        self.close()
+        return HTTPResponse(int(status), "\r".join(data[index:]).strip())
 
     def command(self, url, command="GET", args=None):
+        urlinfo = urllib.parse.urlparse(url)
+        if not urlinfo.hostname:
+            print("Error: No hostname detected. Did you forget to add 'http://'?\n")
+            exit()
+
         if (command == "POST"):
             return self.POST( url, args )
         else:
